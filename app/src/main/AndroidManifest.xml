@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <application android:theme="@style/AppTheme" android:label="T&amp;H BLE" android:icon="@drawable/app_icon">
+    <application android:theme="@style/AppTheme" android:label="T&amp;H BLE" android:icon="@mipmap/ic_launcher">
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
