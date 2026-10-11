@@ -14,9 +14,8 @@ public class DeviceDb {
     }
     // Derived from the advertisement payload by Ble.parseXiaomi(), not the radio address.
     private static final String XIAOMI_MAC = "6B:95:30:34:2D:58";
-    // Flower Care не привязан к адресу заранее: его MAC берётся из первого
-    // пойманного пакета, поэтому такие записи заводятся на лету и не стираются.
     public static final String TYPE_FLOWER = "xiaomi_flower";
+    private static final String FLOWER_MAC = "51:C5:62:8D:7C:C4";
     private final SharedPreferences prefs;
     public DeviceDb(Context c){prefs=c.getSharedPreferences("devices",Context.MODE_PRIVATE);}
     public List<Device> all(){
@@ -33,13 +32,14 @@ public class DeviceDb {
         if(find("78:05:41:06:91:BA")==null)add("78:05:41:06:91:BA","Minew S1","minew");
         if(find("78:05:41:01:E6:36")==null)add("78:05:41:01:E6:36","Minew WTS300","minew_wts300");
         if(find(XIAOMI_MAC)==null)add(XIAOMI_MAC,"Xiaomi LYWSDCGQ/01ZM","xiaomi");
+        if(find(FLOWER_MAC)==null)add(FLOWER_MAC,"Xiaomi Flower Care",TYPE_FLOWER);
     }
     public void removeUnlisted(){
         for(Device d:all()){
-            if(TYPE_FLOWER.equals(d.type)) continue;
             if(!d.id.equalsIgnoreCase("78:05:41:06:91:BA")
                     &&!d.id.equalsIgnoreCase("78:05:41:01:E6:36")
-                    &&!d.id.equalsIgnoreCase(XIAOMI_MAC)) remove(d.id);
+                    &&!d.id.equalsIgnoreCase(XIAOMI_MAC)
+                    &&!d.id.equalsIgnoreCase(FLOWER_MAC)) remove(d.id);
         }
     }
     public Device find(String id){for(Device d:all())if(d.id.equalsIgnoreCase(id))return d;return null;}

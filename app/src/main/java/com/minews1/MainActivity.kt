@@ -43,8 +43,6 @@ private sealed class Screen {
     data class History(val deviceId: String, val deviceName: String, val deviceType: String) : Screen()
 }
 
-private const val FLOWER_NAME = "Xiaomi Flower Care"
-
 class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var db: HistoryDb
@@ -219,19 +217,11 @@ class MainActivity : ComponentActivity() {
         val edata = record.getServiceData(Ble.EDDYSTONE_UUID)
         val xf = Ble.parseXiaomi(xdata)
         val xmac = xf?.mac
-        if (xf != null && xmac != null) {
+        if (xmac != null) {
+            // Адрес здесь выводится из пакета, а не из радиоадреса, поэтому
+            // пакет Xiaomi опознаётся только по нему.
             val xd = deviceDb.find(xmac)
-            if (xd != null && (xd.type == "xiaomi" || xd.type == DeviceDb.TYPE_FLOWER)) {
-                d = xd
-            } else if (xd == null && xf.product == Ble.PRODUCT_FLOWER_CARE) {
-                // Адрес Flower Care заранее неизвестен, поэтому датчик заводится
-                // по первому же пакету и дальше находится как обычная запись.
-                d = DeviceDb.Device(xmac, FLOWER_NAME, DeviceDb.TYPE_FLOWER)
-                main.post {
-                    deviceDb.add(xmac, FLOWER_NAME, DeviceDb.TYPE_FLOWER)
-                    refreshDevices()
-                }
-            }
+            if (xd != null && (xd.type == "xiaomi" || xd.type == DeviceDb.TYPE_FLOWER)) d = xd
         }
         if (d == null && mdata != null) {
             val embedded = Ble.minewEmbeddedMac(mdata)
