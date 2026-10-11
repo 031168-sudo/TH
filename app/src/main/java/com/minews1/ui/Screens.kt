@@ -3,12 +3,14 @@
 package com.minews1.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,6 +22,8 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -51,11 +55,21 @@ import java.util.Locale
 // A sensor silent for this long is treated as gone, not as still reading its last value.
 private const val StaleAfterMs = 2 * 60 * 1000L
 
+/** Ход вычитки журнала из датчика: он один на всё приложение, импорт идёт по одному. */
+data class ImportState(
+    val running: Boolean = false,
+    val done: Int = 0,
+    val total: Int = 0,
+    val message: String = "",
+)
+
 @Composable
 fun MainScreen(
     devices: List<DeviceDb.Device>,
     sensorStates: Map<String, SensorState>,
     errorText: String,
+    importState: ImportState,
+    onImportHistory: (DeviceDb.Device) -> Unit,
     onOpenHistory: (DeviceDb.Device) -> Unit,
 ) {
     // Drives the staleness check, so a sensor that stops broadcasting clears itself.
@@ -87,6 +101,8 @@ fun MainScreen(
                     DeviceCard(
                         device = device,
                         state = sensorStates[device.id]?.takeIf { now - it.last <= StaleAfterMs },
+                        importState = importState,
+                        onImport = { onImportHistory(device) },
                         onClick = { onOpenHistory(device) },
                     )
                 }
@@ -96,7 +112,13 @@ fun MainScreen(
 }
 
 @Composable
-private fun DeviceCard(device: DeviceDb.Device, state: SensorState?, onClick: () -> Unit) {
+private fun DeviceCard(
+    device: DeviceDb.Device,
+    state: SensorState?,
+    importState: ImportState,
+    onImport: () -> Unit,
+    onClick: () -> Unit,
+) {
     ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -138,7 +160,51 @@ private fun DeviceCard(device: DeviceDb.Device, state: SensorState?, onClick: ()
                 "●  BLE • $time" + if (state.battery >= 0) "  •  ${state.battery}%" else ""
             } else "Ожидание данных"
             Text(statusLine, style = MaterialTheme.typography.labelMedium, color = statusColor)
+            if (isFlower) HistoryImport(importState, onImport)
         }
+    }
+}
+
+/**
+ * Журнал лежит внутри датчика и достаётся только подключением, поэтому это
+ * отдельное действие, а не часть обычного приёма.
+ */
+@Composable
+private fun HistoryImport(importState: ImportState, onImport: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onImport, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+            Text(if (importState.running) "Прервать" else "Загрузить историю")
+        }
+        if (importState.running && importState.total > 0) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "${importState.done} из ${importState.total}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (importState.running) {
+        if (importState.total > 0) {
+            LinearProgressIndicator(
+                progress = { importState.done.toFloat() / importState.total },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Пока идёт чтение, остальные датчики не слушаются",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else if (importState.message.isNotBlank()) {
+        Text(
+            importState.message,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -184,7 +250,7 @@ fun HistoryScreen(
                 readings = readings,
                 from = range.first,
                 to = range.second,
-                humidityTitle = if (deviceType == DeviceDb.TYPE_FLOWER) "Влажность почвы" else "Влажность",
+                deviceType = deviceType,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))

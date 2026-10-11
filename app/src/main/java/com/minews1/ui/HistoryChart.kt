@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,6 +38,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.minews1.DeviceDb
 import com.minews1.HistoryDb
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,43 +50,94 @@ private val PlotRightPad = 44.dp
 private val PlotTopPad = 4.dp
 private val PlotBottomPad = 4.dp
 
+// Ниже минимума график перестаёт читаться, поэтому панели не сжимаются дальше, а список прокручивается.
+private val MinPanelHeight = 168.dp
+private val PanelGap = 6.dp
+// Освещённость и проводимость есть только у Flower Care, и в теме под них цветов нет.
+private val LightColor = Color(0xFFD79020)
+private val ConductivityColor = Color(0xFF8A62C8)
+
+private class ChartSpec(
+    val title: String,
+    val valueOf: (HistoryDb.Reading) -> Float,
+    val color: Color,
+    val axisFormat: (Float) -> String,
+    val readoutFormat: (Float) -> String,
+)
+
 @Composable
 fun HistoryChart(
     readings: List<HistoryDb.Reading>,
     from: Long,
     to: Long,
-    humidityTitle: String = "Влажность",
+    deviceType: String,
     modifier: Modifier = Modifier,
 ) {
-    // One touch marks the same moment on both panels, so a reading is never half-answered.
+    // One touch marks the same moment on every panel, so a reading is never half-answered.
     var selectedTs by remember { mutableStateOf<Long?>(null) }
-    Column(modifier) {
-        ChartPanel(
-            title = "Температура",
-            readings = readings,
-            from = from,
-            to = to,
-            valueOf = { it.temp },
-            lineColor = MaterialTheme.colorScheme.primary,
-            axisFormat = { String.format(Locale.getDefault(), "%.1f", it) },
-            readoutFormat = { String.format(Locale.getDefault(), "%.2f °C", it) },
-            selectedTs = selectedTs,
-            onSelect = { selectedTs = it },
-            modifier = Modifier.weight(1f).fillMaxSize().padding(bottom = 6.dp),
+    val isFlower = deviceType == DeviceDb.TYPE_FLOWER
+    val panels = buildList {
+        add(
+            ChartSpec(
+                title = "Температура",
+                valueOf = { it.temp },
+                color = MaterialTheme.colorScheme.primary,
+                axisFormat = { String.format(Locale.getDefault(), "%.1f", it) },
+                readoutFormat = { String.format(Locale.getDefault(), "%.2f °C", it) },
+            ),
         )
-        ChartPanel(
-            title = humidityTitle,
-            readings = readings,
-            from = from,
-            to = to,
-            valueOf = { it.hum },
-            lineColor = MaterialTheme.colorScheme.tertiary,
-            axisFormat = { String.format(Locale.getDefault(), "%.0f", it) },
-            readoutFormat = { String.format(Locale.getDefault(), "%.1f %%", it) },
-            selectedTs = selectedTs,
-            onSelect = { selectedTs = it },
-            modifier = Modifier.weight(1f).fillMaxSize(),
+        add(
+            ChartSpec(
+                title = if (isFlower) "Влажность почвы" else "Влажность",
+                valueOf = { it.hum },
+                color = MaterialTheme.colorScheme.tertiary,
+                axisFormat = { String.format(Locale.getDefault(), "%.0f", it) },
+                readoutFormat = { String.format(Locale.getDefault(), "%.1f %%", it) },
+            ),
         )
+        if (isFlower) {
+            add(
+                ChartSpec(
+                    title = "Освещённость",
+                    valueOf = { it.lux },
+                    color = LightColor,
+                    axisFormat = { String.format(Locale.getDefault(), "%.0f", it) },
+                    readoutFormat = { String.format(Locale.getDefault(), "%.0f лк", it) },
+                ),
+            )
+            add(
+                ChartSpec(
+                    title = "Проводимость",
+                    valueOf = { it.cond },
+                    color = ConductivityColor,
+                    axisFormat = { String.format(Locale.getDefault(), "%.0f", it) },
+                    readoutFormat = { String.format(Locale.getDefault(), "%.0f мкСм/см", it) },
+                ),
+            )
+        }
+    }
+
+    BoxWithConstraints(modifier) {
+        val available = maxHeight - PanelGap * (panels.size - 1)
+        val panelHeight = (available / panels.size).coerceAtLeast(MinPanelHeight)
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            panels.forEachIndexed { index, spec ->
+                ChartPanel(
+                    title = spec.title,
+                    readings = readings,
+                    from = from,
+                    to = to,
+                    valueOf = spec.valueOf,
+                    lineColor = spec.color,
+                    axisFormat = spec.axisFormat,
+                    readoutFormat = spec.readoutFormat,
+                    selectedTs = selectedTs,
+                    onSelect = { selectedTs = it },
+                    modifier = Modifier.fillMaxWidth().height(panelHeight),
+                )
+                if (index != panels.lastIndex) Spacer(Modifier.height(PanelGap))
+            }
+        }
     }
 }
 

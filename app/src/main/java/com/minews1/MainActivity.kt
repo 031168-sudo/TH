@@ -22,9 +22,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.minews1.ui.ImportState
 import com.minews1.ui.HistoryScreen
 import com.minews1.ui.MainScreen
 import com.minews1.ui.theme.MinewTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -58,6 +67,13 @@ class MainActivity : ComponentActivity() {
     // Shown only when something blocks scanning; blank while everything works.
     private var errorText by mutableStateOf("")
 
+    // Радиоадрес отличается от показанного в карточке: тот выведен из пакета.
+    // Для подключения нужен именно радиоадрес, поэтому он запоминается при приёме.
+    private val radioAddress = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var importJob: Job? = null
+    private var importState by mutableStateOf(ImportState())
+
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (!needPermissions()) startMonitoring() else errorText = "Нет разрешения на Bluetooth и геолокацию"
     }
@@ -79,6 +95,8 @@ class MainActivity : ComponentActivity() {
                             devices = devices,
                             sensorStates = sensorStates,
                             errorText = errorText,
+                            importState = importState,
+                            onImportHistory = ::importHistory,
                             onOpenHistory = { d -> goHistory(d.id, d.name, d.type) },
                         )
                         is Screen.History -> {
@@ -105,12 +123,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        stopScan()
-        main.removeCallbacksAndMessages(null)
+        if (importJob?.isActive != true) {
+            stopScan()
+            main.removeCallbacksAndMessages(null)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
     }
 
     override fun onResume() {
         super.onResume()
+        if (importJob?.isActive == true) return
         if (!screenIsHistory && !needPermissions()) {
             main.postDelayed({ if (!screenIsHistory) startMonitoring() }, 150)
         }
@@ -139,6 +165,50 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshDevices() {
         devices = deviceDb.all()
+    }
+
+    /**
+     * Вычитывает журнал Flower Care по GATT. Подключение занимает радио целиком,
+     * поэтому на время импорта сканирование останавливается, а повторное нажатие
+     * прерывает начатое.
+     */
+    private fun importHistory(device: DeviceDb.Device) {
+        val running = importJob
+        if (running?.isActive == true) {
+            running.cancel()
+            return
+        }
+        val address = radioAddress[device.id]
+        if (address == null) {
+            importState = ImportState(message = "Датчик не слышно — поднесите его ближе и подождите")
+            return
+        }
+        importState = ImportState(running = true, message = "Подключение…")
+        stopScan()
+        main.removeCallbacksAndMessages(null)
+        importJob = scope.launch {
+            try {
+                val result = FlowerCare.readHistory(applicationContext, address) { done, total ->
+                    importState = ImportState(running = true, done = done, total = total)
+                }
+                val written = withContext(Dispatchers.IO) { db.addAll(device.id, result.entries) }
+                if (result.battery >= 0) {
+                    val prev = sensorStates[device.id] ?: SensorState()
+                    sensorStates = sensorStates + (device.id to prev.copy(battery = result.battery))
+                }
+                importState = ImportState(message = buildString {
+                    append("Загружено новых записей: $written из ${result.entries.size}")
+                    if (result.battery >= 0) append(" • заряд ${result.battery}%")
+                    if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
+                })
+            } catch (e: CancellationException) {
+                importState = ImportState(message = "Импорт прерван")
+            } catch (e: Exception) {
+                importState = ImportState(message = e.message ?: "Не удалось прочитать журнал")
+            } finally {
+                if (!screenIsHistory) startMonitoring()
+            }
+        }
     }
 
     private fun goMain() {
@@ -221,7 +291,10 @@ class MainActivity : ComponentActivity() {
             // Адрес здесь выводится из пакета, а не из радиоадреса, поэтому
             // пакет Xiaomi опознаётся только по нему.
             val xd = deviceDb.find(xmac)
-            if (xd != null && (xd.type == "xiaomi" || xd.type == DeviceDb.TYPE_FLOWER)) d = xd
+            if (xd != null && (xd.type == "xiaomi" || xd.type == DeviceDb.TYPE_FLOWER)) {
+                d = xd
+                radioAddress[xd.id] = scanMac
+            }
         }
         if (d == null && mdata != null) {
             val embedded = Ble.minewEmbeddedMac(mdata)
@@ -322,7 +395,13 @@ class MainActivity : ComponentActivity() {
             last = System.currentTimeMillis(),
         )
         sensorStates = sensorStates + (id to next)
-        if (!next.t.isNaN() || !next.h.isNaN()) db.add(id, next.last, next.t, next.h)
+        if (!next.t.isNaN() || !next.h.isNaN()) {
+            db.add(
+                id, next.last, next.t, next.h,
+                if (next.lux >= 0) next.lux.toFloat() else Float.NaN,
+                if (next.conductivity >= 0) next.conductivity.toFloat() else Float.NaN,
+            )
+        }
         errorText = ""
     }
 }
