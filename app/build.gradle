@@ -4,6 +4,9 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// Номер сборки приходит из CI, чтобы каждая следующая была новее предыдущей.
+def buildNumber = (System.getenv('APP_BUILD_NUMBER') ?: '1') as int
+
 android {
     namespace 'com.minews1'
     compileSdk 35
@@ -29,9 +32,8 @@ android {
         applicationId 'com.minews1.sensor'
         minSdk 23
         targetSdk 35
-        // Номер сборки приходит из CI, чтобы каждая следующая была новее предыдущей.
-        versionCode (System.getenv('APP_BUILD_NUMBER') ?: '1').toInteger()
-        versionName '1.' + (System.getenv('APP_BUILD_NUMBER') ?: '0')
+        versionCode buildNumber
+        versionName "1.$buildNumber"
     }
 
     buildFeatures {
