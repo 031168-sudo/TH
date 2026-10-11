@@ -196,11 +196,17 @@ class MainActivity : ComponentActivity() {
                     val prev = sensorStates[device.id] ?: SensorState()
                     sensorStates = sensorStates + (device.id to prev.copy(battery = result.battery))
                 }
-                importState = ImportState(message = buildString {
-                    append("Загружено новых записей: $written из ${result.entries.size}")
-                    if (result.battery >= 0) append(" • заряд ${result.battery}%")
-                    if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
-                })
+                importState = ImportState(
+                    message = buildString {
+                        append("Загружено новых записей: $written из ${result.entries.size}")
+                        if (result.battery >= 0) append(" • заряд ${result.battery}%")
+                        if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
+                        if (result.entries.isEmpty()) append("\nДатчик сообщил, что журнал пуст")
+                    },
+                    // Пустой журнал может значить и «нечего отдавать», и «читаем не оттуда»,
+                    // поэтому вместе с ним показываем, что именно ответил датчик.
+                    details = if (result.entries.isEmpty()) result.diagnostics else "",
+                )
             } catch (e: CancellationException) {
                 importState = ImportState(message = "Импорт прерван")
             } catch (e: Exception) {

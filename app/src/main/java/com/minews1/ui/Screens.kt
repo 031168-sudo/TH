@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +63,8 @@ data class ImportState(
     val done: Int = 0,
     val total: Int = 0,
     val message: String = "",
+    /** Технический ответ датчика; показывается мелким шрифтом, когда он нужен. */
+    val details: String = "",
 )
 
 @Composable
@@ -206,6 +209,15 @@ private fun HistoryImport(importState: ImportState, onImport: () -> Unit) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (importState.details.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                importState.details,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

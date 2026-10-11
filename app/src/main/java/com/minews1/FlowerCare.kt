@@ -27,17 +27,26 @@ object FlowerCare {
     private val HISTORY_DATA = UUID.fromString("00001a11-0000-1000-8000-00805f9b34fb")
     private val DEVICE_TIME = UUID.fromString("00001a12-0000-1000-8000-00805f9b34fb")
     private val FIRMWARE = UUID.fromString("00001a02-0000-1000-8000-00805f9b34fb")
+    private val MODE_CHANGE = UUID.fromString("00001a00-0000-1000-8000-00805f9b34fb")
 
     // Открывает журнал на чтение. Команда A2 в ту же характеристику стирает
     // журнал в датчике, поэтому её здесь нет и быть не должно.
     private val CMD_HISTORY_INIT = byteArrayOf(0xA0.toByte(), 0x00, 0x00)
+    // Будит датчик для чтения; на части прошивок без этого он отвечает нулями.
+    private val CMD_WAKE = byteArrayOf(0xA0.toByte(), 0x1F)
     private const val CMD_HISTORY_ENTRY = 0xA1.toByte()
 
     private const val ENTRY_SIZE = 16
     private const val OP_TIMEOUT_MS = 10_000L
     private const val CONNECT_TIMEOUT_MS = 20_000L
 
-    class Result(val entries: List<HistoryDb.Reading>, val battery: Int, val firmware: String)
+    class Result(
+        val entries: List<HistoryDb.Reading>,
+        val battery: Int,
+        val firmware: String,
+        /** Что именно ответил датчик — показывается, когда журнал оказался пуст. */
+        val diagnostics: String,
+    )
 
     class Failure(message: String) : Exception(message)
 
@@ -80,15 +89,19 @@ object FlowerCare {
                 if (v.size > 2) firmware = String(v, 2, v.size - 2, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
             }
 
+            runCatching { session.write(gatt, MODE_CHANGE, CMD_WAKE) }
+
             session.write(gatt, HISTORY_CONTROL, CMD_HISTORY_INIT)
             val head = session.read(gatt, HISTORY_DATA)
             if (head.size < 2) throw Failure("Датчик не отдал размер журнала")
             val count = le16(head, 0)
 
-            val bootMs = runCatching { session.read(gatt, DEVICE_TIME) }.getOrNull()
+            val timeRaw = runCatching { session.read(gatt, DEVICE_TIME) }.getOrNull()
+            val bootMs = timeRaw
                 ?.takeIf { it.size >= 4 }
                 ?.let { System.currentTimeMillis() - le32(it, 0) * 1000L }
                 ?: throw Failure("Датчик не отдал своё время — даты записей не восстановить")
+            val diagnostics = describe(gatt, head, timeRaw)
 
             val entries = ArrayList<HistoryDb.Reading>(count)
             onProgress(0, count)
@@ -98,7 +111,7 @@ object FlowerCare {
                 if (v.size >= ENTRY_SIZE) entries.add(parseEntry(v, bootMs))
                 onProgress(i + 1, count)
             }
-            return Result(entries, battery, firmware)
+            return Result(entries, battery, firmware, diagnostics)
         } catch (e: TimeoutCancellationException) {
             throw Failure("Датчик не отвечает")
         } finally {
@@ -106,6 +119,34 @@ object FlowerCare {
             try { gatt.close() } catch (e: SecurityException) { /* no-op */ }
         }
     }
+
+    /** Снимок того, что видно в датчике: по нему разбирается, почему журнал не читается. */
+    @SuppressLint("MissingPermission")
+    private fun describe(gatt: BluetoothGatt, head: ByteArray, time: ByteArray?): String = buildString {
+        for (service in gatt.services) {
+            append(shortUuid(service.uuid)).append(": ")
+            append(service.characteristics.joinToString(" ") { shortUuid(it.uuid) + props(it) })
+            append('\n')
+        }
+        append("head ").append(hex(head)).append('\n')
+        append("time ").append(hex(time))
+    }
+
+    private fun shortUuid(uuid: UUID): String {
+        val text = uuid.toString()
+        return if (text.endsWith("-0000-1000-8000-00805f9b34fb")) text.substring(4, 8) else text
+    }
+
+    private fun props(c: BluetoothGattCharacteristic): String = buildString {
+        val p = c.properties
+        if (p and BluetoothGattCharacteristic.PROPERTY_READ != 0) append('R')
+        if (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) append('W')
+        if (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) append('w')
+        if (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) append('N')
+    }.let { if (it.isEmpty()) "" else "[$it]" }
+
+    private fun hex(b: ByteArray?): String =
+        b?.joinToString(" ") { String.format("%02X", it.toInt() and 255) } ?: "—"
 
     private fun parseEntry(v: ByteArray, bootMs: Long): HistoryDb.Reading {
         val seconds = le32(v, 0)
