@@ -44,7 +44,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.minews1.BuildConfig
 import com.minews1.DeviceDb
 import com.minews1.HistoryDb
 import com.minews1.SensorState
@@ -84,23 +83,22 @@ fun MainScreen(
             now = System.currentTimeMillis()
         }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("T&H BLE") }) }) { padding ->
+    // Без заголовка: карточки датчиков начинаются сразу под строкой состояния.
+    Scaffold { padding ->
         Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
-            Text(
-                "BLE-мониторинг датчиков • v" + BuildConfig.VERSION_NAME,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-            )
             if (errorText.isNotBlank()) {
                 Text(
                     errorText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 12.dp),
+                    modifier = Modifier.padding(top = 10.dp, bottom = 10.dp),
                 )
             }
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LazyColumn(
+                Modifier.weight(1f),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 items(devices, key = { it.id }) { device ->
                     DeviceCard(
                         device = device,
