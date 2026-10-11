@@ -26,5 +26,5 @@ jobs:
         run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: TH-BLE-debug-apk
+          name: Moi-Datchiki-debug-apk
           path: app/build/outputs/apk/debug/*.apk
