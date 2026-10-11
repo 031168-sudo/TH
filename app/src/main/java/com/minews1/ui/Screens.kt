@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.minews1.BuildConfig
 import com.minews1.DeviceDb
 import com.minews1.HistoryDb
 import com.minews1.SensorState
@@ -83,7 +84,7 @@ fun MainScreen(
     Scaffold(topBar = { TopAppBar(title = { Text("T&H BLE") }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
             Text(
-                "BLE-мониторинг датчиков",
+                "BLE-мониторинг датчиков • v" + BuildConfig.VERSION_NAME,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),

@@ -8,16 +8,40 @@ android {
     namespace 'com.minews1'
     compileSdk 35
 
+    // Одна и та же подпись на все сборки. Android разрешает поставить сборку
+    // поверх установленной, только если подпись совпадает; со случайным ключом,
+    // который сборочная машина заводит заново каждый раз, обновление невозможно,
+    // и приходится сносить приложение вместе с накопленной историей.
+    //
+    // Ключ лежит в репозитории, а репозиторий публичный: пароль ниже стережёт
+    // формат хранилища, но не сам ключ. Это осознанный размен на то, чтобы
+    // обновления ставились в одно нажатие.
+    signingConfigs {
+        shared {
+            storeFile file('signing.jks')
+            storePassword 'JkzPNT1R686VBiVWqYhaqE5xmABhZ2ta'
+            keyAlias 'thble'
+            keyPassword 'JkzPNT1R686VBiVWqYhaqE5xmABhZ2ta'
+        }
+    }
+
     defaultConfig {
         applicationId 'com.minews1.sensor'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        // Номер сборки приходит из CI, чтобы каждая следующая была новее предыдущей.
+        versionCode (System.getenv('APP_BUILD_NUMBER') ?: '1').toInteger()
+        versionName '1.' + (System.getenv('APP_BUILD_NUMBER') ?: '0')
     }
 
     buildFeatures {
         compose true
+        buildConfig true
+    }
+
+    buildTypes {
+        debug { signingConfig signingConfigs.shared }
+        release { signingConfig signingConfigs.shared }
     }
 
     compileOptions {
