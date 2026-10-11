@@ -107,9 +107,28 @@ private fun DeviceCard(device: DeviceDb.Device, state: SensorState?, onClick: ()
                 Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(10.dp))
+            val isFlower = device.type == DeviceDb.TYPE_FLOWER
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 StatValue("Температура", state?.t?.takeIf { !it.isNaN() }?.let { String.format(Locale.US, "%.2f °C", it) } ?: "—.— °C")
-                StatValue("Влажность", state?.h?.takeIf { !it.isNaN() }?.let { String.format(Locale.US, "%.1f %%", it) } ?: "—.— %")
+                StatValue(
+                    if (isFlower) "Влажность почвы" else "Влажность",
+                    state?.h?.takeIf { !it.isNaN() }?.let { String.format(Locale.US, "%.1f %%", it) } ?: "—.— %",
+                )
+            }
+            if (isFlower) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    StatValue(
+                        "Освещённость",
+                        state?.lux?.takeIf { it >= 0 }?.let { String.format(Locale.US, "%d лк", it) } ?: "— лк",
+                        compact = true,
+                    )
+                    StatValue(
+                        "Проводимость",
+                        state?.conductivity?.takeIf { it >= 0 }?.let { String.format(Locale.US, "%d мкСм/см", it) } ?: "— мкСм/см",
+                        compact = true,
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
             val active = state != null && state.last > 0
@@ -124,9 +143,13 @@ private fun DeviceCard(device: DeviceDb.Device, state: SensorState?, onClick: ()
 }
 
 @Composable
-private fun StatValue(label: String, value: String) {
+private fun StatValue(label: String, value: String, compact: Boolean = false) {
     Column {
-        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            value,
+            style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+        )
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -135,6 +158,7 @@ private fun StatValue(label: String, value: String) {
 fun HistoryScreen(
     deviceId: String,
     deviceName: String,
+    deviceType: String,
     db: HistoryDb,
     onBack: () -> Unit,
 ) {
@@ -156,7 +180,13 @@ fun HistoryScreen(
         Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp)) {
             SegmentedPeriodTabs(period = period, onSelect = { period = it })
             Spacer(Modifier.height(8.dp))
-            HistoryChart(readings = readings, from = range.first, to = range.second, modifier = Modifier.weight(1f).fillMaxWidth())
+            HistoryChart(
+                readings = readings,
+                from = range.first,
+                to = range.second,
+                humidityTitle = if (deviceType == DeviceDb.TYPE_FLOWER) "Влажность почвы" else "Влажность",
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
             Spacer(Modifier.height(8.dp))
             DateNavRow(
                 title = title,

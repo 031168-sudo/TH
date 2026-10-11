@@ -47,7 +47,13 @@ private val PlotTopPad = 4.dp
 private val PlotBottomPad = 4.dp
 
 @Composable
-fun HistoryChart(readings: List<HistoryDb.Reading>, from: Long, to: Long, modifier: Modifier = Modifier) {
+fun HistoryChart(
+    readings: List<HistoryDb.Reading>,
+    from: Long,
+    to: Long,
+    humidityTitle: String = "Влажность",
+    modifier: Modifier = Modifier,
+) {
     // One touch marks the same moment on both panels, so a reading is never half-answered.
     var selectedTs by remember { mutableStateOf<Long?>(null) }
     Column(modifier) {
@@ -65,7 +71,7 @@ fun HistoryChart(readings: List<HistoryDb.Reading>, from: Long, to: Long, modifi
             modifier = Modifier.weight(1f).fillMaxSize().padding(bottom = 6.dp),
         )
         ChartPanel(
-            title = "Влажность",
+            title = humidityTitle,
             readings = readings,
             from = from,
             to = to,

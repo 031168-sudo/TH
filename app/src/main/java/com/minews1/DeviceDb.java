@@ -12,8 +12,11 @@ public class DeviceDb {
         public String id, name, type;
         public Device(String i, String n, String t){id=i;name=n;type=t;}
     }
-    // Derived from the advertisement payload by Ble.xiaomiMac(), not the radio address.
+    // Derived from the advertisement payload by Ble.parseXiaomi(), not the radio address.
     private static final String XIAOMI_MAC = "6B:95:30:34:2D:58";
+    // Flower Care не привязан к адресу заранее: его MAC берётся из первого
+    // пойманного пакета, поэтому такие записи заводятся на лету и не стираются.
+    public static final String TYPE_FLOWER = "xiaomi_flower";
     private final SharedPreferences prefs;
     public DeviceDb(Context c){prefs=c.getSharedPreferences("devices",Context.MODE_PRIVATE);}
     public List<Device> all(){
@@ -33,6 +36,7 @@ public class DeviceDb {
     }
     public void removeUnlisted(){
         for(Device d:all()){
+            if(TYPE_FLOWER.equals(d.type)) continue;
             if(!d.id.equalsIgnoreCase("78:05:41:06:91:BA")
                     &&!d.id.equalsIgnoreCase("78:05:41:01:E6:36")
                     &&!d.id.equalsIgnoreCase(XIAOMI_MAC)) remove(d.id);

@@ -32,13 +32,18 @@ data class SensorState(
     val t: Float = Float.NaN,
     val h: Float = Float.NaN,
     val battery: Int = -1,
+    // Только у Flower Care: освещённость в люксах и проводимость почвы в мкСм/см.
+    val lux: Int = -1,
+    val conductivity: Int = -1,
     val last: Long = 0L,
 )
 
 private sealed class Screen {
     data object Main : Screen()
-    data class History(val deviceId: String, val deviceName: String) : Screen()
+    data class History(val deviceId: String, val deviceName: String, val deviceType: String) : Screen()
 }
+
+private const val FLOWER_NAME = "Xiaomi Flower Care"
 
 class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
@@ -76,13 +81,14 @@ class MainActivity : ComponentActivity() {
                             devices = devices,
                             sensorStates = sensorStates,
                             errorText = errorText,
-                            onOpenHistory = { d -> goHistory(d.id, d.name) },
+                            onOpenHistory = { d -> goHistory(d.id, d.name, d.type) },
                         )
                         is Screen.History -> {
                             BackHandler(onBack = ::goMain)
                             HistoryScreen(
                                 deviceId = s.deviceId,
                                 deviceName = s.deviceName,
+                                deviceType = s.deviceType,
                                 db = db,
                                 onBack = ::goMain,
                             )
@@ -143,11 +149,11 @@ class MainActivity : ComponentActivity() {
         startMonitoring()
     }
 
-    private fun goHistory(deviceId: String, name: String) {
+    private fun goHistory(deviceId: String, name: String, type: String) {
         screenIsHistory = true
         stopScan()
         main.removeCallbacksAndMessages(null)
-        screen = Screen.History(deviceId, name)
+        screen = Screen.History(deviceId, name, type)
     }
 
     private fun startMonitoring() {
@@ -211,10 +217,21 @@ class MainActivity : ComponentActivity() {
         val xdata = record.getServiceData(Ble.XIAOMI_UUID)
         val mdata = record.getServiceData(Ble.MINEW_UUID)
         val edata = record.getServiceData(Ble.EDDYSTONE_UUID)
-        if (xdata != null && Ble.isXiaomi(xdata)) {
-            val embedded = Ble.xiaomiMac(xdata)
-            val xd = embedded?.let { deviceDb.find(it) }
-            if (xd != null && xd.type == "xiaomi") d = xd
+        val xf = Ble.parseXiaomi(xdata)
+        val xmac = xf?.mac
+        if (xf != null && xmac != null) {
+            val xd = deviceDb.find(xmac)
+            if (xd != null && (xd.type == "xiaomi" || xd.type == DeviceDb.TYPE_FLOWER)) {
+                d = xd
+            } else if (xd == null && xf.product == Ble.PRODUCT_FLOWER_CARE) {
+                // Адрес Flower Care заранее неизвестен, поэтому датчик заводится
+                // по первому же пакету и дальше находится как обычная запись.
+                d = DeviceDb.Device(xmac, FLOWER_NAME, DeviceDb.TYPE_FLOWER)
+                main.post {
+                    deviceDb.add(xmac, FLOWER_NAME, DeviceDb.TYPE_FLOWER)
+                    refreshDevices()
+                }
+            }
         }
         if (d == null && mdata != null) {
             val embedded = Ble.minewEmbeddedMac(mdata)
@@ -228,6 +245,8 @@ class MainActivity : ComponentActivity() {
         var t = Float.NaN
         var h = Float.NaN
         var battery = -1
+        var lux = -1
+        var conductivity = -1
 
         when (d.type) {
             "minew" -> {
@@ -245,19 +264,39 @@ class MainActivity : ComponentActivity() {
                 )
                 if (!d.id.equals(scanMac, ignoreCase = true) && !d.id.equals(embedded, ignoreCase = true)) return
             }
-            "xiaomi" -> {
-                if (xdata == null || !Ble.isXiaomi(xdata)) return
-                when (Ble.u(xdata, 11)) {
-                    0x0D -> {
-                        if (xdata.size < 18) return
-                        val tr = (Ble.u(xdata, 14) or (Ble.u(xdata, 15) shl 8)).toShort()
-                        val hr = (Ble.u(xdata, 16) or (Ble.u(xdata, 17) shl 8)).toShort()
-                        t = tr / 10f
-                        h = hr / 10f
+            "xiaomi", DeviceDb.TYPE_FLOWER -> {
+                if (xf == null) return
+                val v = xf.value
+                when (xf.objectId) {
+                    Ble.OBJ_TEMP_HUMIDITY -> {
+                        if (v.size < 4) return
+                        t = (Ble.u(v, 0) or (Ble.u(v, 1) shl 8)).toShort() / 10f
+                        h = (Ble.u(v, 2) or (Ble.u(v, 3) shl 8)).toShort() / 10f
                     }
-                    0x0A -> {
-                        if (xdata.size < 15) return
-                        battery = Ble.u(xdata, 14)
+                    Ble.OBJ_TEMPERATURE -> {
+                        if (v.size < 2) return
+                        t = (Ble.u(v, 0) or (Ble.u(v, 1) shl 8)).toShort() / 10f
+                    }
+                    Ble.OBJ_HUMIDITY -> {
+                        if (v.size < 2) return
+                        h = (Ble.u(v, 0) or (Ble.u(v, 1) shl 8)).toShort() / 10f
+                    }
+                    // Влажность почвы Flower Care передаёт целыми процентами.
+                    Ble.OBJ_MOISTURE -> {
+                        if (v.isEmpty()) return
+                        h = Ble.u(v, 0).toFloat()
+                    }
+                    Ble.OBJ_ILLUMINANCE -> {
+                        if (v.size < 3) return
+                        lux = Ble.u(v, 0) or (Ble.u(v, 1) shl 8) or (Ble.u(v, 2) shl 16)
+                    }
+                    Ble.OBJ_CONDUCTIVITY -> {
+                        if (v.size < 2) return
+                        conductivity = Ble.u(v, 0) or (Ble.u(v, 1) shl 8)
+                    }
+                    Ble.OBJ_BATTERY -> {
+                        if (v.isEmpty()) return
+                        battery = Ble.u(v, 0)
                     }
                     else -> return
                 }
@@ -277,15 +316,19 @@ class MainActivity : ComponentActivity() {
         val ft = t
         val fh = h
         val fb = battery
-        main.post { updateSensor(id, ft, fh, fb) }
+        val fl = lux
+        val fc = conductivity
+        main.post { updateSensor(id, ft, fh, fb, fl, fc) }
     }
 
-    private fun updateSensor(id: String, t: Float, h: Float, battery: Int) {
+    private fun updateSensor(id: String, t: Float, h: Float, battery: Int, lux: Int, conductivity: Int) {
         val prev = sensorStates[id] ?: SensorState()
         val next = SensorState(
             t = if (!t.isNaN()) t else prev.t,
             h = if (!h.isNaN()) h else prev.h,
             battery = if (battery >= 0) battery else prev.battery,
+            lux = if (lux >= 0) lux else prev.lux,
+            conductivity = if (conductivity >= 0) conductivity else prev.conductivity,
             last = System.currentTimeMillis(),
         )
         sensorStates = sensorStates + (id to next)
