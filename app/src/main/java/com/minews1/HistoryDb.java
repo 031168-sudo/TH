@@ -15,8 +15,8 @@ public class HistoryDb extends SQLiteOpenHelper {
         public float temp, hum, lux, cond;
         Reading(long t,float a,float h,float l,float c){ts=t;temp=a;hum=h;lux=l;cond=c;}
     }
-    public HistoryDb(Context c){super(c,"minew_history.db",null,4);}
-    @Override public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE readings(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, temp REAL, hum REAL, lux REAL, cond REAL, device_id TEXT NOT NULL)");db.execSQL("CREATE INDEX idx_ts ON readings(ts)");db.execSQL("CREATE INDEX idx_device_ts ON readings(device_id,ts)");}
+    public HistoryDb(Context c){super(c,"minew_history.db",null,5);}
+    @Override public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE readings(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, temp REAL, hum REAL, lux REAL, cond REAL, device_id TEXT NOT NULL)");db.execSQL("CREATE INDEX idx_ts ON readings(ts)");db.execSQL("CREATE INDEX idx_device_ts ON readings(device_id,ts)");createMeta(db);}
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion){
         if(oldVersion<2){db.execSQL("ALTER TABLE readings ADD COLUMN device_id TEXT NOT NULL DEFAULT '78:05:41:06:91:BA'");db.execSQL("CREATE INDEX IF NOT EXISTS idx_device_ts ON readings(device_id,ts)");}
         // Temperature-only sensors have no humidity to store, so both value columns become nullable.
@@ -33,7 +33,21 @@ public class HistoryDb extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE readings ADD COLUMN lux REAL");
             db.execSQL("ALTER TABLE readings ADD COLUMN cond REAL");
         }
+        // Отметка о прочитанном журнале, чтобы в следующий раз брать только новое.
+        if(oldVersion<5){createMeta(db);}
     }
+    private static void createMeta(SQLiteDatabase db){
+        db.execSQL("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER)");
+    }
+    /** Время самой свежей записи, взятой из журнала датчика; 0, если журнал ещё не читали. */
+    public long lastImport(String deviceId){
+        Cursor c=getReadableDatabase().rawQuery("SELECT v FROM meta WHERE k=?",new String[]{importKey(deviceId)});
+        try{return c.moveToFirst()?c.getLong(0):0L;}finally{c.close();}
+    }
+    public void setLastImport(String deviceId,long ts){
+        getWritableDatabase().execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)",new Object[]{importKey(deviceId),ts});
+    }
+    private static String importKey(String deviceId){return "last_import:"+deviceId.toUpperCase();}
     public void add(String deviceId,long ts,float temp,float hum){add(deviceId,ts,temp,hum,Float.NaN,Float.NaN);}
     public void add(String deviceId,long ts,float temp,float hum,float lux,float cond){
         getWritableDatabase().execSQL("INSERT INTO readings(ts,temp,hum,lux,cond,device_id) VALUES(?,?,?,?,?,?)",

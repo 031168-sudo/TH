@@ -37,6 +37,13 @@ object FlowerCare {
     private const val CMD_HISTORY_ENTRY = 0xA1.toByte()
 
     private const val ENTRY_SIZE = 16
+    // Записи ведутся раз в час, поэтому запас в пять минут заведомо не пропустит
+    // новую, но гасит расхождение в пару секунд между двумя подключениями:
+    // время записи считается от часов датчика, а те сверяются с телефоном заново.
+    private const val SAME_ENTRY_TOLERANCE_MS = 5 * 60_000L
+    // Если самая свежая запись заметно старше уже прочитанного, журнал начат
+    // заново (датчик обесточивали) — тогда читаем его целиком.
+    private const val CLOCK_RESET_SLACK_MS = 2 * 60 * 60_000L
     private const val OP_TIMEOUT_MS = 10_000L
     private const val CONNECT_TIMEOUT_MS = 20_000L
 
@@ -51,13 +58,20 @@ object FlowerCare {
     class Failure(message: String) : Exception(message)
 
     /**
-     * Подключается, вычитывает журнал целиком и отключается.
+     * Подключается, дочитывает журнал и отключается.
+     *
+     * [since] — время самой свежей уже сохранённой записи; 0, если журнал ещё не
+     * читали. Записи лежат по порядку, поэтому нужный кусок ищется делением
+     * пополам: вместо всего журнала читается десяток записей на поиск границы
+     * и только то, что появилось после неё.
+     *
      * [onProgress] вызывается после каждой записи: сделано, всего.
      */
     @SuppressLint("MissingPermission")
     suspend fun readHistory(
         context: Context,
         address: String,
+        since: Long,
         onProgress: (Int, Int) -> Unit,
     ): Result {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: throw Failure("Bluetooth недоступен")
@@ -103,13 +117,45 @@ object FlowerCare {
                 ?: throw Failure("Датчик не отдал своё время — даты записей не восстановить")
             val diagnostics = describe(gatt, head, timeRaw)
 
-            val entries = ArrayList<HistoryDb.Reading>(count)
-            onProgress(0, count)
-            for (i in 0 until count) {
-                session.write(gatt, HISTORY_CONTROL, byteArrayOf(CMD_HISTORY_ENTRY, (i and 255).toByte(), ((i shr 8) and 255).toByte()))
+            if (count == 0) return Result(emptyList(), battery, firmware, diagnostics)
+
+            suspend fun entryAt(index: Int): HistoryDb.Reading {
+                session.write(
+                    gatt, HISTORY_CONTROL,
+                    byteArrayOf(CMD_HISTORY_ENTRY, (index and 255).toByte(), ((index shr 8) and 255).toByte()),
+                )
                 val v = session.read(gatt, HISTORY_DATA)
-                if (v.size >= ENTRY_SIZE) entries.add(parseEntry(v, bootMs))
-                onProgress(i + 1, count)
+                if (v.size < ENTRY_SIZE) throw Failure("Датчик отдал запись не того размера")
+                return parseEntry(v, bootMs)
+            }
+
+            val oldest = entryAt(0)
+            val newest = if (count > 1) entryAt(count - 1) else oldest
+            // Поиск границы делением пополам имеет смысл, только если записи идут
+            // по возрастанию времени; иначе честнее прочитать всё.
+            val ordered = newest.ts >= oldest.ts
+
+            var start = 0
+            if (since > 0 && ordered && newest.ts >= since - CLOCK_RESET_SLACK_MS) {
+                val cutoff = since + SAME_ENTRY_TOLERANCE_MS
+                if (newest.ts <= cutoff) return Result(emptyList(), battery, firmware, diagnostics)
+                if (oldest.ts <= cutoff) {
+                    var lo = 0
+                    var hi = count - 1
+                    while (lo < hi) {
+                        val mid = (lo + hi) / 2
+                        if (entryAt(mid).ts > cutoff) hi = mid else lo = mid + 1
+                    }
+                    start = lo
+                }
+            }
+
+            val total = count - start
+            val entries = ArrayList<HistoryDb.Reading>(total)
+            onProgress(0, total)
+            for (i in start until count) {
+                entries.add(entryAt(i))
+                onProgress(i - start + 1, total)
             }
             return Result(entries, battery, firmware, diagnostics)
         } catch (e: TimeoutCancellationException) {

@@ -188,24 +188,36 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null)
         importJob = scope.launch {
             try {
-                val result = FlowerCare.readHistory(applicationContext, address) { done, total ->
+                // Журнал дочитывается с того места, где остановились в прошлый раз.
+                val since = withContext(Dispatchers.IO) { db.lastImport(device.id) }
+                val result = FlowerCare.readHistory(applicationContext, address, since) { done, total ->
                     importState = ImportState(running = true, done = done, total = total)
                 }
-                val written = withContext(Dispatchers.IO) { db.addAll(device.id, result.entries) }
+                val written = withContext(Dispatchers.IO) {
+                    val n = db.addAll(device.id, result.entries)
+                    result.entries.maxOfOrNull { it.ts }
+                        ?.let { db.setLastImport(device.id, maxOf(it, since)) }
+                    n
+                }
                 if (result.battery >= 0) {
                     val prev = sensorStates[device.id] ?: SensorState()
                     sensorStates = sensorStates + (device.id to prev.copy(battery = result.battery))
                 }
+                // Пустой ответ при первом чтении двусмыслен: это и «нечего отдавать»,
+                // и «читаем не оттуда», поэтому к нему прикладывается ответ датчика.
+                val nothingRead = result.entries.isEmpty()
+                val upToDate = nothingRead && since > 0
                 importState = ImportState(
                     message = buildString {
-                        append("Загружено новых записей: $written из ${result.entries.size}")
+                        when {
+                            upToDate -> append("Новых записей нет — журнал уже дочитан")
+                            nothingRead -> append("Датчик сообщил, что журнал пуст")
+                            else -> append("Загружено новых записей: $written из ${result.entries.size}")
+                        }
                         if (result.battery >= 0) append(" • заряд ${result.battery}%")
                         if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
-                        if (result.entries.isEmpty()) append("\nДатчик сообщил, что журнал пуст")
                     },
-                    // Пустой журнал может значить и «нечего отдавать», и «читаем не оттуда»,
-                    // поэтому вместе с ним показываем, что именно ответил датчик.
-                    details = if (result.entries.isEmpty()) result.diagnostics else "",
+                    details = if (nothingRead && !upToDate) result.diagnostics else "",
                 )
             } catch (e: CancellationException) {
                 importState = ImportState(message = "Импорт прерван")
