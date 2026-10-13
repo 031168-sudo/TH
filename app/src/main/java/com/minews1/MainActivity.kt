@@ -52,6 +52,9 @@ private sealed class Screen {
     data class History(val deviceId: String, val deviceName: String, val deviceType: String) : Screen()
 }
 
+private fun stamp(ts: Long): String =
+    if (ts <= 0L) "—" else java.text.SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(java.util.Date(ts))
+
 class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var db: HistoryDb
@@ -206,7 +209,7 @@ class MainActivity : ComponentActivity() {
                 // Пустой ответ при первом чтении двусмыслен: это и «нечего отдавать»,
                 // и «читаем не оттуда», поэтому к нему прикладывается ответ датчика.
                 val nothingRead = result.entries.isEmpty()
-                val upToDate = nothingRead && since > 0
+                val upToDate = nothingRead && result.total > 0
                 importState = ImportState(
                     message = buildString {
                         when {
@@ -217,7 +220,16 @@ class MainActivity : ComponentActivity() {
                         if (result.battery >= 0) append(" • заряд ${result.battery}%")
                         if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
                     },
-                    details = if (nothingRead && !upToDate) result.diagnostics else "",
+                    // Видно, почему прочитано именно столько: сколько записей в датчике,
+                    // какие номера взяты и совпадают ли даты с отметкой прошлой вычитки.
+                    details = buildString {
+                        append("журнал: ${result.total} зап.")
+                        if (result.to >= result.from) append(", читал №${result.from}–${result.to}")
+                        append('\n')
+                        append("края: ${stamp(result.oldestTs)} … ${stamp(result.newestTs)}\n")
+                        append("отметка: ${if (since > 0) stamp(since) else "нет"}")
+                        if (nothingRead && !upToDate) append('\n').append(result.diagnostics)
+                    },
                 )
             } catch (e: CancellationException) {
                 importState = ImportState(message = "Импорт прерван")

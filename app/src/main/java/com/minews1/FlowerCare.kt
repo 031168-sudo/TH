@@ -53,6 +53,14 @@ object FlowerCare {
         val firmware: String,
         /** Что именно ответил датчик — показывается, когда журнал оказался пуст. */
         val diagnostics: String,
+        /** Сколько записей всего в датчике. */
+        val total: Int,
+        /** Какие номера читали: пусто, если не читали ни одной. */
+        val from: Int,
+        val to: Int,
+        /** Края журнала по времени — по ним видно, верно ли разобраны даты. */
+        val oldestTs: Long,
+        val newestTs: Long,
     )
 
     class Failure(message: String) : Exception(message)
@@ -117,7 +125,9 @@ object FlowerCare {
                 ?: throw Failure("Датчик не отдал своё время — даты записей не восстановить")
             val diagnostics = describe(gatt, head, timeRaw)
 
-            if (count == 0) return Result(emptyList(), battery, firmware, diagnostics)
+            if (count == 0) {
+                return Result(emptyList(), battery, firmware, diagnostics, 0, 0, -1, 0L, 0L)
+            }
 
             suspend fun entryAt(index: Int): HistoryDb.Reading {
                 session.write(
@@ -129,35 +139,53 @@ object FlowerCare {
                 return parseEntry(v, bootMs)
             }
 
-            val oldest = entryAt(0)
-            val newest = if (count > 1) entryAt(count - 1) else oldest
-            // Поиск границы делением пополам имеет смысл, только если записи идут
-            // по возрастанию времени; иначе честнее прочитать всё.
-            val ordered = newest.ts >= oldest.ts
+            val head0 = entryAt(0)
+            val tail = if (count > 1) entryAt(count - 1) else head0
+            // Порядок записей в журнале заранее неизвестен, поэтому он определяется
+            // по краям: свежие могут лежать и в конце, и в начале.
+            val newestFirst = tail.ts < head0.ts
+            val oldestTs = minOf(head0.ts, tail.ts)
+            val newestTs = maxOf(head0.ts, tail.ts)
 
-            var start = 0
-            if (since > 0 && ordered && newest.ts >= since - CLOCK_RESET_SLACK_MS) {
+            var from = 0
+            var to = count - 1
+            if (since > 0 && newestTs >= since - CLOCK_RESET_SLACK_MS) {
                 val cutoff = since + SAME_ENTRY_TOLERANCE_MS
-                if (newest.ts <= cutoff) return Result(emptyList(), battery, firmware, diagnostics)
-                if (oldest.ts <= cutoff) {
+                if (newestTs <= cutoff) {
+                    return Result(emptyList(), battery, firmware, diagnostics, count, 0, -1, oldestTs, newestTs)
+                }
+                if (oldestTs <= cutoff) {
                     var lo = 0
                     var hi = count - 1
-                    while (lo < hi) {
-                        val mid = (lo + hi) / 2
-                        if (entryAt(mid).ts > cutoff) hi = mid else lo = mid + 1
+                    if (newestFirst) {
+                        // Номер 0 — самая свежая: ищем первую запись, которая уже известна.
+                        while (lo < hi) {
+                            val mid = (lo + hi) / 2
+                            if (entryAt(mid).ts > cutoff) lo = mid + 1 else hi = mid
+                        }
+                        to = lo - 1
+                    } else {
+                        // Номер 0 — самая старая: ищем первую запись новее отметки.
+                        while (lo < hi) {
+                            val mid = (lo + hi) / 2
+                            if (entryAt(mid).ts > cutoff) hi = mid else lo = mid + 1
+                        }
+                        from = lo
                     }
-                    start = lo
                 }
             }
 
-            val total = count - start
+            val total = to - from + 1
+            if (total <= 0) {
+                return Result(emptyList(), battery, firmware, diagnostics, count, 0, -1, oldestTs, newestTs)
+            }
             val entries = ArrayList<HistoryDb.Reading>(total)
             onProgress(0, total)
-            for (i in start until count) {
+            for (i in from..to) {
                 entries.add(entryAt(i))
-                onProgress(i - start + 1, total)
+                onProgress(i - from + 1, total)
             }
-            return Result(entries, battery, firmware, diagnostics)
+            return Result(entries, battery, firmware, diagnostics, count, from, to, oldestTs, newestTs)
         } catch (e: TimeoutCancellationException) {
             throw Failure("Датчик не отвечает")
         } finally {
