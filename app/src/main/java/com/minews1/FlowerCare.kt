@@ -73,6 +73,10 @@ object FlowerCare {
      * пополам: вместо всего журнала читается десяток записей на поиск границы
      * и только то, что появилось после неё.
      *
+     * [collected] заполняется по ходу чтения и в порядке времени, поэтому
+     * оборванная на середине вычитка не пропадает: сохранить и продолжить с того
+     * же места можно по тому, что уже успело прийти.
+     *
      * [onProgress] вызывается после каждой записи: сделано, всего.
      */
     @SuppressLint("MissingPermission")
@@ -80,6 +84,7 @@ object FlowerCare {
         context: Context,
         address: String,
         since: Long,
+        collected: MutableList<HistoryDb.Reading>,
         onProgress: (Int, Int) -> Unit,
     ): Result {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: throw Failure("Bluetooth недоступен")
@@ -179,13 +184,16 @@ object FlowerCare {
             if (total <= 0) {
                 return Result(emptyList(), battery, firmware, diagnostics, count, 0, -1, oldestTs, newestTs)
             }
-            val entries = ArrayList<HistoryDb.Reading>(total)
+            // Читаем от старых к новым, как бы они ни лежали в датчике: тогда
+            // оборванная вычитка оставляет непрерывный кусок, и отметку о
+            // прочитанном можно двигать по нему, не теряя остального.
+            val order = if (newestFirst) (to downTo from) else (from..to)
             onProgress(0, total)
-            for (i in from..to) {
-                entries.add(entryAt(i))
-                onProgress(i - from + 1, total)
+            for ((done, i) in order.withIndex()) {
+                collected.add(entryAt(i))
+                onProgress(done + 1, total)
             }
-            return Result(entries, battery, firmware, diagnostics, count, from, to, oldestTs, newestTs)
+            return Result(collected.toList(), battery, firmware, diagnostics, count, from, to, oldestTs, newestTs)
         } catch (e: TimeoutCancellationException) {
             throw Failure("Датчик не отвечает")
         } finally {
@@ -293,9 +301,17 @@ object FlowerCare {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                try { gatt.discoverServices() } catch (e: SecurityException) { ready.completeExceptionally(Failure("Нет разрешения на подключение")) }
+                // Сразу после подключения стек ещё не готов и отвечает 133,
+                // поэтому поиск сервисов начинается с небольшой задержкой.
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    try {
+                        if (!gatt.discoverServices()) ready.completeExceptionally(Failure("Датчик не дал прочитать сервисы"))
+                    } catch (e: SecurityException) {
+                        ready.completeExceptionally(Failure("Нет разрешения на подключение"))
+                    }
+                }, 600)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                val err = Failure("Связь с датчиком разорвана")
+                val err = Failure(if (status == BluetoothGatt.GATT_SUCCESS) "Связь с датчиком разорвана" else "Связь оборвалась, код $status")
                 ready.completeExceptionally(err)
                 pending?.completeExceptionally(err)
                 pending = null

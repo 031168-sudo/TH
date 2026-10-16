@@ -29,6 +29,7 @@ import com.minews1.ui.theme.MinewTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +52,9 @@ private sealed class Screen {
     data object Main : Screen()
     data class History(val deviceId: String, val deviceName: String, val deviceType: String) : Screen()
 }
+
+// Связь с датчиком рвётся сама по себе, поэтому одной попытки мало.
+private const val IMPORT_ATTEMPTS = 3
 
 private fun stamp(ts: Long): String =
     if (ts <= 0L) "—" else java.text.SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(java.util.Date(ts))
@@ -170,6 +174,14 @@ class MainActivity : ComponentActivity() {
         devices = deviceDb.all()
     }
 
+    /** Записывает прочитанный кусок журнала и двигает отметку по его концу. */
+    private fun saveEntries(deviceId: String, entries: List<HistoryDb.Reading>, since: Long): Int {
+        if (entries.isEmpty()) return 0
+        val written = db.addAll(deviceId, entries)
+        entries.maxOfOrNull { it.ts }?.let { db.setLastImport(deviceId, maxOf(it, since)) }
+        return written
+    }
+
     /**
      * Вычитывает журнал Flower Care по GATT. Подключение занимает радио целиком,
      * поэтому на время импорта сканирование останавливается, а повторное нажатие
@@ -192,47 +204,76 @@ class MainActivity : ComponentActivity() {
         importJob = scope.launch {
             try {
                 // Журнал дочитывается с того места, где остановились в прошлый раз.
-                val since = withContext(Dispatchers.IO) { db.lastImport(device.id) }
-                val result = FlowerCare.readHistory(applicationContext, address, since) { done, total ->
-                    importState = ImportState(running = true, done = done, total = total)
+                var since = withContext(Dispatchers.IO) { db.lastImport(device.id) }
+                var written = 0
+                var result: FlowerCare.Result? = null
+                var failure: String? = null
+                // Связь с датчиком рвётся на ровном месте, поэтому прочитанное
+                // сохраняется после каждой попытки, а следующая продолжает с него.
+                for (attempt in 1..IMPORT_ATTEMPTS) {
+                    val collected = mutableListOf<HistoryDb.Reading>()
+                    try {
+                        result = FlowerCare.readHistory(applicationContext, address, since, collected) { done, total ->
+                            importState = ImportState(running = true, done = done, total = total)
+                        }
+                        failure = null
+                    } catch (e: CancellationException) {
+                        saveEntries(device.id, collected, since)
+                        throw e
+                    } catch (e: Exception) {
+                        failure = e.message ?: "Не удалось прочитать журнал"
+                    }
+                    written += withContext(Dispatchers.IO) { saveEntries(device.id, collected, since) }
+                    since = withContext(Dispatchers.IO) { db.lastImport(device.id) }
+                    if (result != null) break
+                    if (attempt < IMPORT_ATTEMPTS) {
+                        importState = ImportState(running = true, done = 0, total = 0)
+                        delay(2000)
+                    }
                 }
-                val written = withContext(Dispatchers.IO) {
-                    val n = db.addAll(device.id, result.entries)
-                    result.entries.maxOfOrNull { it.ts }
-                        ?.let { db.setLastImport(device.id, maxOf(it, since)) }
-                    n
+                val done = result
+                if (done == null) {
+                    importState = ImportState(
+                        message = buildString {
+                            append(failure ?: "Не удалось прочитать журнал")
+                            append(". Сохранено записей: $written")
+                            if (written > 0) append(" — следующая попытка продолжит с этого места")
+                        },
+                    )
+                    return@launch
                 }
-                if (result.battery >= 0) {
+                val result2 = done
+                if (result2.battery >= 0) {
                     val prev = sensorStates[device.id] ?: SensorState()
-                    sensorStates = sensorStates + (device.id to prev.copy(battery = result.battery))
+                    sensorStates = sensorStates + (device.id to prev.copy(battery = result2.battery))
                 }
                 // Пустой ответ при первом чтении двусмыслен: это и «нечего отдавать»,
                 // и «читаем не оттуда», поэтому к нему прикладывается ответ датчика.
-                val nothingRead = result.entries.isEmpty()
-                val upToDate = nothingRead && result.total > 0
+                val nothingRead = result2.entries.isEmpty()
+                val upToDate = nothingRead && result2.total > 0
                 importState = ImportState(
                     message = buildString {
                         when {
                             upToDate -> append("Новых записей нет — журнал уже дочитан")
                             nothingRead -> append("Датчик сообщил, что журнал пуст")
-                            else -> append("Загружено новых записей: $written из ${result.entries.size}")
+                            else -> append("Загружено новых записей: $written из ${result2.entries.size}")
                         }
-                        if (result.battery >= 0) append(" • заряд ${result.battery}%")
-                        if (result.firmware.isNotBlank()) append(" • прошивка ${result.firmware}")
+                        if (result2.battery >= 0) append(" • заряд ${result2.battery}%")
+                        if (result2.firmware.isNotBlank()) append(" • прошивка ${result2.firmware}")
                     },
                     // Видно, почему прочитано именно столько: сколько записей в датчике,
                     // какие номера взяты и совпадают ли даты с отметкой прошлой вычитки.
                     details = buildString {
-                        append("журнал: ${result.total} зап.")
-                        if (result.to >= result.from) append(", читал №${result.from}–${result.to}")
+                        append("журнал: ${result2.total} зап.")
+                        if (result2.to >= result2.from) append(", читал №${result2.from}–${result2.to}")
                         append('\n')
-                        append("края: ${stamp(result.oldestTs)} … ${stamp(result.newestTs)}\n")
+                        append("края: ${stamp(result2.oldestTs)} … ${stamp(result2.newestTs)}\n")
                         append("отметка: ${if (since > 0) stamp(since) else "нет"}")
-                        if (nothingRead && !upToDate) append('\n').append(result.diagnostics)
+                        if (nothingRead && !upToDate) append('\n').append(result2.diagnostics)
                     },
                 )
             } catch (e: CancellationException) {
-                importState = ImportState(message = "Импорт прерван")
+                importState = ImportState(message = "Импорт прерван — прочитанное сохранено")
             } catch (e: Exception) {
                 importState = ImportState(message = e.message ?: "Не удалось прочитать журнал")
             } finally {
